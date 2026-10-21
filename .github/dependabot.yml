@@ -26,3 +26,17 @@ updates:
       - ci
     commit-message:
       prefix: "ci"
+    groups:
+      # 同一个 action 的所有步骤必须一起升级。
+      # github/codeql-action 的 init 与 analyze 版本必须一致——
+      # 只升级其中一个会导致 "Loaded a configuration file for version X,
+      # but running version Y" 而失败。分成一组就不会再拆开。
+      codeql:
+        patterns:
+          - "github/codeql-action/*"
+      # 其余 action 按名字分组，一个 action 一次升级完。
+      actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github/codeql-action/*"
