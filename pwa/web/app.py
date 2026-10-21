@@ -24,6 +24,28 @@ from ..store import Store
 
 BASE_DIR = __import__("pathlib").Path(__file__).resolve().parent
 
+# 发送被拦截时按错误码返回的**固定文案**。
+# 拦截原因里可能带内部细节（会话名、白名单内容、异常原文），
+# 不直接透给浏览器，只给稳定文案 + 机器可读的 kind。
+_SEND_ERROR_TEXT = {
+    "draft_not_found": "草稿不存在",
+    "send_disabled": "发送能力未启用（PWA_ENABLE_SEND != true）",
+    "no_sender": "没有可用的发送实现，请使用复制功能自行发送",
+    "allowlist_empty": "目标会话白名单为空，不允许发送任何会话",
+    "not_allowlisted": "目标会话不在白名单内，已中止发送",
+    "rate_limited": "发送频率超限，已中止发送",
+    "not_approved": "草稿未处于已批准状态",
+    "login_expired": "微信未处于有效登录状态，已中止发送",
+    "identity_unknown": "无法确认当前会话，已中止发送",
+    "window_changed": "微信窗口已变化，已中止发送",
+    "ocr_unreliable": "识别不可靠，已中止发送",
+    "permission_denied": "缺少系统权限，已中止发送",
+    "chat_changed": "当前微信会话已切换，已中止发送",
+    "trigger_missing": "触发消息已不在当前会话中，已中止发送",
+    "empty_reply": "回复内容为空",
+    "send_error": "发送失败，请查看处理记录",
+}
+
 
 class DraftUpdate(BaseModel):
     reply_text: str = Field(min_length=1, max_length=4000)
@@ -159,7 +181,11 @@ def create_app(
         try:
             result = gate.send(draft_id, approved_text=(payload.text if payload else None))
         except SendBlocked as exc:
-            return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
+            # 只把稳定的错误码和固定文案返回给客户端；详细原因留在本地事件表。
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "kind": exc.kind, "error": _SEND_ERROR_TEXT.get(exc.kind, "发送被拦截")},
+            )
         return {"ok": True, **result}
     # -- 观察控制 -----------------------------------------------------------
     @app.post("/api/observe/pause")
@@ -214,8 +240,12 @@ def create_app(
             raise HTTPException(status_code=501, detail="观察管线未配置")
         try:
             drafts = pipe.poll_once()
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
+        except Exception:  # noqa: BLE001
+            # 异常原文可能带本机路径等内部细节，不返回给客户端；
+            # 详细信息已经在 Pipeline 里记进事件表。
+            return JSONResponse(
+                status_code=409, content={"ok": False, "error": "观察失败，请查看处理记录"}
+            )
         return {"ok": True, "created": len(drafts)}
 
     @app.get("/api/events")

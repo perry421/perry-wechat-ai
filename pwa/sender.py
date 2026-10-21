@@ -29,7 +29,17 @@ from .store import Store
 
 
 class SendBlocked(Exception):
-    """发送被安全门拦截。"""
+    """发送被安全门拦截。
+
+    ``kind`` 是稳定的机器可读错误码，``reason`` 是给人看的说明。
+    界面/接口应该按 ``kind`` 决定展示文案，不要直接把 ``reason`` 透出去——
+    ``reason`` 里可能带内部细节（如异常原文）。
+    """
+
+    def __init__(self, reason: str, *, kind: str = "blocked") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.kind = kind
 
 
 @dataclass
@@ -37,6 +47,7 @@ class SendVerification:
     ok: bool
     reason: str = ""
     checks: dict[str, bool] | None = None
+    kind: str = "blocked"
 
 
 class SendGate:
@@ -69,21 +80,29 @@ class SendGate:
 
         draft = self.store.get_draft(draft_id)
         if draft is None:
-            return SendVerification(False, "草稿不存在", checks)
+            return SendVerification(False, "草稿不存在", checks, kind="draft_not_found")
         checks["draft_exists"] = True
 
         if not self.enable_send:
-            return SendVerification(False, "发送能力未启用（PWA_ENABLE_SEND != true）", checks)
+            return SendVerification(
+                False, "发送能力未启用（PWA_ENABLE_SEND != true）", checks, kind="send_disabled"
+            )
 
         if self.sender is None:
             return SendVerification(
-                False, "没有可用的发送实现（sender 未配置），请使用复制功能自行发送", checks
+                False,
+                "没有可用的发送实现（sender 未配置），请使用复制功能自行发送",
+                checks,
+                kind="no_sender",
             )
 
         # 目标会话白名单：空 → 一律拒绝
         if not self.allow_chats:
             return SendVerification(
-                False, "目标会话白名单为空，不允许发送任何会话", checks
+                False,
+                "目标会话白名单为空，不允许发送任何会话",
+                checks,
+                kind="allowlist_empty",
             )
         draft_chat_name = (draft["chat_name"] or "").strip().lower()
         allowed = {name.strip().lower() for name in self.allow_chats}
@@ -94,6 +113,7 @@ class SendGate:
                 f"草稿会话 {draft['chat_name']!r} 不在白名单内"
                 f"（允许：{', '.join(sorted(allowed))}）",
                 checks,
+                kind="not_allowlisted",
             )
 
         # 发送频率限制
@@ -103,31 +123,41 @@ class SendGate:
                 f"发送频率超限（{self.rate_limiter.window_seconds:.0f} 秒内最多 "
                 f"{self.rate_limiter.max_sends} 条）",
                 checks,
+                kind="rate_limited",
             )
 
         if draft["status"] != DraftStatus.APPROVED.value:
-            return SendVerification(False, "草稿未处于已批准状态", checks)
+            return SendVerification(
+                False, "草稿未处于已批准状态", checks, kind="not_approved"
+            )
 
         # 1. 登录状态
         try:
             login_ok = self.observer.is_login_valid()
         except ObserverError as exc:
-            return SendVerification(False, f"无法确认微信登录状态: {exc}", checks)
+            return SendVerification(
+                False, "无法确认微信登录状态", checks, kind=exc.kind
+            )
         checks["login_valid"] = bool(login_ok)
         if not login_ok:
-            return SendVerification(False, "微信未处于有效登录状态", checks)
+            return SendVerification(
+                False, "微信未处于有效登录状态", checks, kind="login_expired"
+            )
 
         # 2. 当前窗口会话必须仍是草稿对应的会话
         try:
             current = self._current_chat_id()
         except ObserverError as exc:
-            return SendVerification(False, f"无法确认当前会话: {exc}", checks)
+            return SendVerification(
+                False, "无法确认当前会话", checks, kind=exc.kind
+            )
         checks["chat_unchanged"] = current == draft["chat_id"]
         if current != draft["chat_id"]:
             return SendVerification(
                 False,
-                f"当前微信会话已切换（当前={current}，草稿={draft['chat_id']}），已中止发送",
+                "当前微信会话已切换，已中止发送",
                 checks,
+                kind="chat_changed",
             )
 
         # 3. 触发消息仍应出现在当前会话中
@@ -136,52 +166,59 @@ class SendGate:
                 self._chat_identity(draft), limit=30
             )
         except ObserverError as exc:
-            return SendVerification(False, f"无法读取当前会话: {exc}", checks)
+            return SendVerification(
+                False, "无法读取当前会话", checks, kind=exc.kind
+            )
         trigger = (draft["trigger_text"] or "").strip()
         matched = any(m.text.strip() == trigger for m in messages)
         checks["trigger_present"] = matched
         if not matched:
             return SendVerification(
-                False, "触发消息已不在当前会话中（上下文可能已变化），已中止发送", checks
+                False,
+                "触发消息已不在当前会话中（上下文可能已变化），已中止发送",
+                checks,
+                kind="trigger_missing",
             )
 
-        return SendVerification(True, "核验通过", checks)
+        return SendVerification(True, "核验通过", checks, kind="ok")
 
     # -- 发送 ---------------------------------------------------------------
     def send(self, draft_id: str, *, approved_text: str | None = None) -> dict[str, Any]:
         """发送一条已批准的草稿。"""
         draft = self.store.get_draft(draft_id)
         if draft is None:
-            raise SendBlocked("草稿不存在")
+            raise SendBlocked("草稿不存在", kind="draft_not_found")
 
         verification = self.verify(draft_id)
         self.store.add_event(
             draft_id,
             "send_verify",
-            f"ok={verification.ok} {verification.reason} checks={verification.checks}",
+            f"ok={verification.ok} kind={verification.kind} {verification.reason} "
+            f"checks={verification.checks}",
         )
         if not verification.ok:
             self.store.update_draft(
                 draft_id, status=DraftStatus.FAILED.value, error=verification.reason
             )
-            raise SendBlocked(verification.reason)
+            raise SendBlocked(verification.reason, kind=verification.kind)
 
         text = (approved_text or draft["reply_text"] or "").strip()
         if not text:
             self.store.update_draft(
                 draft_id, status=DraftStatus.FAILED.value, error="回复内容为空"
             )
-            raise SendBlocked("回复内容为空")
+            raise SendBlocked("回复内容为空", kind="empty_reply")
 
         assert self.sender is not None
         try:
             result = self.sender(draft["chat_id"], text)
         except Exception as exc:  # noqa: BLE001 - 发送失败必须被捕获并记录
+            # 详细原因写进本地事件表（不外传）；对外只给固定文案。
             self.store.update_draft(
-                draft_id, status=DraftStatus.FAILED.value, error=f"发送异常: {exc}"
+                draft_id, status=DraftStatus.FAILED.value, error="发送失败，请查看处理记录"
             )
-            self.store.add_event(draft_id, "send_error", str(exc))
-            raise SendBlocked(f"发送异常: {exc}") from exc
+            self.store.add_event(draft_id, "send_error", f"{type(exc).__name__}: {exc}")
+            raise SendBlocked("发送失败，请查看处理记录", kind="send_error") from exc
 
         if self.rate_limiter is not None:
             self.rate_limiter.allow()

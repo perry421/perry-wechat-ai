@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -111,6 +113,7 @@ def test_send_without_approval_is_blocked(env):
         res = c.post(f"/api/drafts/{draft_id}/send", json={"draft_id": draft_id})
         assert res.status_code == 409
         assert res.json()["ok"] is False
+        assert res.json()["kind"] == "not_approved"
 
 
 def test_send_disabled_blocks(env):
@@ -274,3 +277,44 @@ def test_send_blocked_when_rate_limited(env):
         res = c.post(f"/api/drafts/{second_id}/send", json={"draft_id": second_id})
         assert res.status_code == 409
         assert "频率" in res.json()["error"]
+        assert res.json()["kind"] == "rate_limited"
+
+
+# ------------------------------------------------------------ 错误信息不外泄
+def test_send_error_response_does_not_leak_internal_details(env):
+    """接口返回的文案必须是固定文案，不能带内部细节。
+
+    CodeQL 的 py/stack-trace-exposure 指出异常原文会流向 HTTP 响应。
+    这里验证：发送器抛出带本机路径的异常时，响应里看不到那些内容。
+    """
+    secret = "/Users/someone/Library/PrivateFolder/secret-token"
+
+    def exploding_sender(cid, text):
+        raise RuntimeError(f"失败细节 {secret}")
+
+    with _client(env, sender=exploding_sender) as c:
+        c.post("/api/observe/poll")
+        draft_id = c.get("/api/drafts").json()[0]["id"]
+        c.post(f"/api/drafts/{draft_id}/approve")
+        res = c.post(f"/api/drafts/{draft_id}/send", json={"draft_id": draft_id})
+        assert res.status_code == 409
+        body = res.json()
+        assert body["kind"] == "send_error"
+        assert secret not in json.dumps(body)
+        assert "RuntimeError" not in json.dumps(body)
+        # 详细原因仍然留在本地事件表里，便于排查
+        detail = c.get(f"/api/drafts/{draft_id}").json()
+        assert detail["status"] == DraftStatus.FAILED.value
+
+
+def test_allowlist_error_does_not_reveal_whitelist_contents(env):
+    """不在白名单时，响应不能列出白名单里都有谁。"""
+    with _client(env, sender=lambda cid, text: {"ok": True}, allow_chats=("别人",)) as c:
+        c.post("/api/observe/poll")
+        draft_id = c.get("/api/drafts").json()[0]["id"]
+        c.post(f"/api/drafts/{draft_id}/approve")
+        res = c.post(f"/api/drafts/{draft_id}/send", json={"draft_id": draft_id})
+        assert res.status_code == 409
+        body = res.json()
+        assert body["kind"] == "not_allowlisted"
+        assert "别人" not in json.dumps(body)

@@ -10,8 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
-_BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
