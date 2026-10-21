@@ -257,7 +257,7 @@ PWA_ENABLE_SEND=false          # 需要时彻底关掉发送能力
 .venv/bin/python -m pytest tests/ -q
 ```
 
-**140 个测试全部通过**（2026-10-21 实测，耗时 6.85s）。
+**140 个测试全部通过**（2026-10-21 实测，耗时 6.41s）。
 
 覆盖：正常/空消息、重复消息、相似联系人与群聊、窗口切换、登录失效、OCR 失败、
 API 超时与额度不足、模型输出异常、用户取消批准、发送前会话变化、紧急停止、
@@ -269,6 +269,76 @@ API 超时与额度不足、模型输出异常、用户取消批准、发送前�
 
 CI 里跑的是同一套测试，**不连接真实微信、不向任何联系人发送消息**——测试全部
 使用 `MockObserver` / `MockProvider`。
+
+## GitHub 协作流程
+
+仓库：https://github.com/perry421/perry-wechat-ai （公开，MIT）
+
+### CI 与安全扫描
+
+| 工作流 | 触发 | 内容 |
+|---|---|---|
+| `.github/workflows/ci.yml` | push / PR 到 main | pytest（Python 3.12 + 3.13）、导入检查 |
+| `.github/workflows/security.yml` | push / PR / 每周一 03:17 UTC | gitleaks、pip-audit、CodeQL（python，security-and-quality） |
+| `.github/workflows/release.yml` | 推 `v*` tag / 手动 | 构建 wheel + sdist、twine check、发 GitHub Release |
+| `.github/workflows/ai-review.yml` | PR | Claude Code 只读审查（**默认关闭**，见下） |
+
+CI 里的测试**不连接真实微信、不向任何联系人发送消息**——全部用
+`MockObserver` / `MockProvider`。
+
+所有 action 都 pin 到 commit SHA（不是浮动 tag），并用 dependabot 的
+dependency group 保证同一个 action 的所有步骤一起升级。
+
+### 分支保护（main）
+
+- 必须通过 5 项检查：`pytest (py3.12)`、`pytest (py3.13)`、`gitleaks（密钥泄漏）`、
+  `pip-audit（依赖漏洞）`、`CodeQL（静态分析）`
+- `strict=true`：分支上的检查必须是最新的
+- 管理员也受约束（`enforce_admins=true`）
+- 强制 squash 合并历史、禁止 force push、禁止删除分支
+- PR 必须先解决所有对话
+- 审批数为 0：单人仓库的合理设置，**代价是自己开的 PR 可以自己合并**
+
+直接 `git push main` 会被拒绝（已实测）。
+
+### 安全设置
+
+- secret scanning + push protection 已开启
+- dependabot security updates 已开启
+- 仓库默认 workflow 权限为 `read`
+- `secret_scanning_validity_checks` **无法开启**——个人账号套餐限制，API 静默忽略
+
+### AI 审查（默认关闭）
+
+用 Anthropic 官方的 `claude-code-action` 在 PR 上跑只读代码审查，审查要点针对
+"代替本人发微信消息"的场景。
+
+**需要三样都配好才会跑**，缺一即整条跳过：
+
+1. 仓库变量 `AI_REVIEW_ENABLED=true`
+2. 仓库 secret `ANTHROPIC_API_KEY`
+3. 仓库设置 → General → Features → 允许 Claude 审查并评论 PR
+
+它**不是合并门禁**（不在 required checks 里）。启用步骤和 v1 的两个坑见
+`.github/AI_REVIEW.md`。
+
+### 协作约定
+
+- PR 模板要求写清：测试证据、**未验证的部分**、安全影响、回滚方式
+- Issue 模板分 bug 和 feature 两类
+- `CODEOWNERS` 指定 `@perry421` 负责全部
+- 提交信息前缀：`feat` / `fix` / `ci` / `deps` / `docs`
+
+### 发布
+
+打 `v*` tag 触发 `release.yml`：构建 wheel + sdist → `twine check` → 发
+GitHub Release。
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+也可以在 Actions 页面手动触发 `Release` 工作流并填入 tag 名。
 
 ## 项目结构
 
