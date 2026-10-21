@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag，例如 v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装构建工具
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: 构建 wheel 与 sdist
+        run: python -m build
+
+      - name: 校验产物
+        run: |
+          ls -lh dist/
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - name: 发布到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.whl dist/*.tar.gz \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

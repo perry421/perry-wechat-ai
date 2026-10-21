@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perry WeChat AI · 审核队列</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="mark"></span>
+    <div>
+      <h1>审核队列</h1>
+      <p class="sub" id="statusline">连接中…</p>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="btn" id="btn-poll">立即观察</button>
+    <button class="btn" id="btn-pause">暂停</button>
+    <button class="btn btn-danger" id="btn-auto-stop">停止自动回复</button>
+    <button class="btn btn-danger" id="btn-stop">紧急停止</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="stats" id="stats"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>草稿队列</h2>
+      <div class="filters">
+        <button class="chip is-active" data-status="pending">待审核</button>
+        <button class="chip" data-status="approved">已批准待发送</button>
+        <button class="chip" data-status="sent">已发送</button>
+        <button class="chip" data-status="failed">失败</button>
+        <button class="chip" data-status="unknown">状态未知</button>
+        <button class="chip" data-status="cancelled">已取消</button>
+        <button class="chip" data-status="">全部</button>
+      </div>
+    </div>
+    <div id="list" class="list"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>处理记录</h2></div>
+    <div id="events" class="events"></div>
+  </section>
+</main>
+
+<dialog id="detail">
+  <div class="detail-inner">
+    <header class="detail-head">
+      <h3 id="d-title"></h3>
+      <button class="btn btn-ghost" id="d-close">关闭</button>
+    </header>
+    <div class="detail-body" id="d-body"></div>
+    <footer class="detail-foot" id="d-foot"></footer>
+  </div>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

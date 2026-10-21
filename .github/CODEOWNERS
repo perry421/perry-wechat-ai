@@ -1,0 +1,14 @@
+# 配置
+
+CODEOWNERS 让 GitHub 在有 PR 改动时自动请求指定人评审。
+只有仓库所有者本人维护时，把用户名换成自己的即可。
+
+# 默认：任何改动都需要所有者评审
+* @perry421
+
+# 单独点名关键路径，方便以后加协作者时定向评审
+# /pwa/sender.py      @perry421   # 发送安全门
+# /pwa/guard.py       @perry421   # 限流与授权闸门
+# /pwa/observer/      @perry421   # 微信观察器（截图 / OCR / 坐标常量）
+# /.github/workflows/ @perry421   # CI 与发布流程
+# /.github/           @perry421   # 仓库策略文件
