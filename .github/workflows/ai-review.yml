@@ -1,0 +1,103 @@
+name: AI Review
+
+# AI 代码审查（Claude Code）
+#
+# ⚠️ **默认不启用**。工作流文件在仓库里，但默认会整条跳过。要跑通需要：
+#
+#   1. 仓库变量 `AI_REVIEW_ENABLED` = `true`（显式打开开关）
+#   2. 仓库级 secret `ANTHROPIC_API_KEY`
+#   3. 允许 Claude 审查 PR
+#      （仓库 → Settings → General → Features →
+#       "Allow Claude Code to review and comment on pull requests"）
+#
+# 三样都配好之前，这个工作流不会运行；配好之后它**仍然不是合并门禁**——
+# 分支保护要求的 5 项检查里没有这一项。配置方式见 `.github/AI_REVIEW.md`。
+#
+# 为什么要默认关掉：AI 审查会消耗 API 额度，而且它的结论**不能**替代
+# 人工判断——尤其是本项目涉及"代替本人发微信消息"的安全门改动。
+# 它的定位是"多一双眼睛找问题"，不是"批准合并"。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# 同一 PR 的新提交取消旧审查，避免重复消耗额度
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  # 用来把 OIDC token 换成 GitHub App token；不放宽任何写权限
+  id-token: write
+
+jobs:
+  review:
+    name: Claude 代码审查
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 三重跳过：
+    # - AI_REVIEW_ENABLED 没打开 → 整条不跑（默认关闭）
+    # - fork 的 PR → 不跑（跨仓库 PR 拿不到 secret，也不在本仓库信任范围内）
+    # - Dependabot 的 PR → 不跑（依赖升级不需要 AI 审查，省额度）
+    if: >-
+      vars.AI_REVIEW_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 全量历史：审查要拿 base 分支做 diff
+          fetch-depth: 0
+          # 明确检出 PR 头提交，`git diff origin/<base>...HEAD` 才是这个 PR 的改动
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Claude 审查
+        uses: anthropics/claude-code-action@a5a423f75c251dcbff8a74e99f83b2cb03c72bfa # v1.0.256
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 只读工具：不给 Edit/Write，不给任何写 git 的命令。
+          # disallowedTools 是第二道保险——allowedTools 写漏了也改不了代码。
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
+            --disallowedTools "Edit,Write,NotebookEdit,Bash(git commit:*),Bash(git push:*),Bash(git merge:*)"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR BASE BRANCH: ${{ github.event.pull_request.base.ref }}
+
+            审查这个 pull request 的改动。**只给意见，不要修改任何文件。**
+
+            这个项目会代替本人向真实微信联系人发送消息。请重点检查：
+
+            1. 发送安全门（pwa/sender.py、pwa/guard.py）的**默认行为**是否被放宽：
+               - PWA_ENABLE_SEND 默认 false
+               - PWA_SEND_DRY_RUN 默认 true（只填输入框，不按回车）
+               - 白名单为空 = 拒绝一切发送
+               - 每条草稿必须单独批准
+               - 发送频率限制
+               - 紧急停止
+            2. 是否把异常原文、内部路径、聊天内容写进了 HTTP 响应或日志
+            3. 是否把密钥、真实聊天记录、截图、数据库文件写进代码
+            4. 聊天内容是否被当作**不可信输入**处理（不能执行对方发来的指令）
+            5. 去重逻辑是否会被绕过（重复回复 / 漏回复）
+            6. 新增测试是否真的覆盖了它声称覆盖的场景
+
+            怎么读改动：
+
+            - `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` 看本次 PR 的改动
+            - `git log origin/${{ github.event.pull_request.base.ref }}..HEAD` 看提交
+            - Read / Grep 读相关文件，理解改动前后的上下文
+
+            怎么给意见：
+
+            - 具体到某一行的，用 `mcp__github_inline_comment__create_inline_comment`，
+              并传 `confirmed: true` 让它立刻发出
+            - 总体结论（尤其是"未发现问题"），用这条命令把正文从标准输入喂进去：
+
+              gh pr comment ${{ github.event.pull_request.number }} \
+                --repo ${{ github.repository }} --body-file -
+
+            如果都没问题，直接说"未发现问题"，不要为了凑数而提无关紧要的
+            风格建议。
