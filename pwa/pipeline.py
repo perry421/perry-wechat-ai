@@ -15,7 +15,6 @@ from typing import Any
 from .models import (
     ChatIdentity,
     ChatContext,
-    Difficulty,
     ObservedMessage,
     ObserverError,
     ProviderError,

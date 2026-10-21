@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from pwa.models import ChatIdentity, ObservedMessage, chat_id_for
@@ -55,11 +57,10 @@ def test_list_chats_does_not_use_sidebar_parsing():
         return []
 
     obs._parse_chat_list = fake_sidebar  # type: ignore[method-assign]
-    # 只验证它不碰侧边栏解析路径——current_chat_id 依赖真实微信，这里跳过
-    try:
+    # 只验证它不碰侧边栏解析路径——current_chat_id 依赖真实微信，
+    # 在没有微信的机器上会抛错，这里预期地吞掉。
+    with contextlib.suppress(Exception):
         obs.list_chats()
-    except Exception:
-        pass
     assert called["sidebar"] is False
 
 
